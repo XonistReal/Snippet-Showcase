@@ -179,12 +179,12 @@ SQL returns rendered result tables in `logs`.
 
 ## 8. Milestones / checklist
 
-- [ ] **P0** Plan committed (this file)
-- [ ] **P1** Server scaffold: Express + TS + SQLite schema + seed
-- [ ] **P2** Snippet + vote + fork REST endpoints
-- [ ] **P3** Execution engine: JS, TS, Python, Bash, SQL + sandbox limits
-- [ ] **P4** Frontend: API client, identity, feed/vote/fork wired to API
-- [ ] **P5** Frontend: real "Run" via API; CSS live preview
-- [ ] **P6** DX: combined dev script, proxy, env, server Dockerfile
-- [ ] **P7** Docs: update README; verify build, lint, and end-to-end run
+- [x] **P0** Plan committed (this file)
+- [x] **P1** Server scaffold: Express + TS + SQLite schema + seed
+- [x] **P2** Snippet + vote + fork REST endpoints
+- [x] **P3** Execution engine: JS, TS, Python, Bash, SQL + sandbox limits
+- [x] **P4** Frontend: API client, identity, feed/vote/fork wired to API
+- [x] **P5** Frontend: real "Run" via API; CSS live preview
+- [x] **P6** DX: combined dev script, proxy, env, server Dockerfile
+- [x] **P7** Docs: update README; verify build, lint, and end-to-end run
 ```
