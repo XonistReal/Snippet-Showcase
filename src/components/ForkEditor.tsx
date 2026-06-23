@@ -1,30 +1,53 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import Editor from 'react-simple-code-editor'
 import { highlight } from '../lib/prism'
-import { runJavaScript, type LogLine } from '../lib/runner'
-import type { Snippet } from '../types'
+import { runJavaScript } from '../lib/runner'
+import { executeCode, forkSnippet } from '../lib/api'
+import type { LogLine, Snippet } from '../types'
 
 interface Props {
   snippet: Snippet
+  online: boolean
+  onForked: (created: Snippet) => void
   onClose: () => void
 }
 
-export function ForkEditor({ snippet, onClose }: Props) {
+const isCss = (s: Snippet) => s.language === 'css'
+
+export function ForkEditor({ snippet, online, onForked, onClose }: Props) {
   const [code, setCode] = useState(snippet.code)
+  const [title, setTitle] = useState(`${snippet.title} (fork)`)
   const [logs, setLogs] = useState<LogLine[]>([])
   const [running, setRunning] = useState(false)
   const [hasRun, setHasRun] = useState(false)
   const [copied, setCopied] = useState(false)
-  const dialogRef = useRef<HTMLDivElement>(null)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
 
   const run = useCallback(async () => {
     if (!snippet.runnable) return
     setRunning(true)
     setHasRun(true)
-    const result = await runJavaScript(code)
-    setLogs(result)
-    setRunning(false)
-  }, [code, snippet.runnable])
+    try {
+      if (online) {
+        const result = await executeCode(snippet.language, code)
+        setLogs(result.logs)
+      } else if (snippet.language === 'javascript') {
+        setLogs(await runJavaScript(code))
+      } else {
+        setLogs([
+          {
+            level: 'warn',
+            text: `Running ${snippet.language} requires the backend, which is offline.`,
+          },
+        ])
+      }
+    } catch (err) {
+      setLogs([{ level: 'error', text: (err as Error).message }])
+    } finally {
+      setRunning(false)
+    }
+  }, [code, online, snippet.language, snippet.runnable])
 
   const reset = useCallback(() => {
     setCode(snippet.code)
@@ -42,7 +65,25 @@ export function ForkEditor({ snippet, onClose }: Props) {
     }
   }, [code])
 
-  // Auto-run runnable snippets once on open so there's instant feedback.
+  const save = useCallback(async () => {
+    if (!online) {
+      setSaveError('Saving forks requires the backend.')
+      return
+    }
+    setSaving(true)
+    setSaveError(null)
+    try {
+      const created = await forkSnippet(snippet.id, {
+        title: title.trim() || `${snippet.title} (fork)`,
+        code,
+      })
+      onForked(created)
+    } catch (err) {
+      setSaveError((err as Error).message)
+      setSaving(false)
+    }
+  }, [code, online, onForked, snippet.id, snippet.title, title])
+
   useEffect(() => {
     if (snippet.runnable) void run()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -60,11 +101,14 @@ export function ForkEditor({ snippet, onClose }: Props) {
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose, run])
 
+  const showConsole = snippet.runnable
+  const showPreview = isCss(snippet)
+  const hasSidePane = showConsole || showPreview
+
   return (
     <div className="modal-backdrop" onMouseDown={onClose}>
       <div
         className="modal"
-        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label={`Fork of ${snippet.title}`}
@@ -75,15 +119,17 @@ export function ForkEditor({ snippet, onClose }: Props) {
           <div className="modal-title">
             <span className="fork-icon" aria-hidden>⑂</span>
             <div>
-              <h2>Forked: {snippet.title}</h2>
+              <h2>Forking: {snippet.title}</h2>
               <p>
                 <span className={`lang-pill lang-${snippet.language}`}>
                   {snippet.language}
                 </span>
                 <span className="hint">
-                  {snippet.runnable
-                    ? 'Edit & run — ⌘/Ctrl + Enter'
-                    : 'Edit freely — this language runs outside the browser'}
+                  {showConsole
+                    ? 'Edit & run on the server — ⌘/Ctrl + Enter'
+                    : showPreview
+                      ? 'Edit CSS — preview updates live'
+                      : 'Edit freely'}
                 </span>
               </p>
             </div>
@@ -93,7 +139,7 @@ export function ForkEditor({ snippet, onClose }: Props) {
           </button>
         </header>
 
-        <div className={`editor-grid ${snippet.runnable ? '' : 'editor-grid--solo'}`}>
+        <div className={`editor-grid ${hasSidePane ? '' : 'editor-grid--solo'}`}>
           <div className="editor-pane">
             <div className="pane-label">editor.{extFor(snippet.language)}</div>
             <div className="editor-scroll">
@@ -114,10 +160,15 @@ export function ForkEditor({ snippet, onClose }: Props) {
             </div>
           </div>
 
-          {snippet.runnable && (
+          {showConsole && (
             <div className="console-pane">
               <div className="pane-label">
                 console
+                {online ? (
+                  <span className="pane-tag">server</span>
+                ) : (
+                  <span className="pane-tag pane-tag--warn">offline</span>
+                )}
                 {running && <span className="spinner" aria-hidden />}
               </div>
               <div className="console-scroll">
@@ -136,6 +187,20 @@ export function ForkEditor({ snippet, onClose }: Props) {
               </div>
             </div>
           )}
+
+          {showPreview && (
+            <div className="console-pane">
+              <div className="pane-label">
+                preview<span className="pane-tag">live</span>
+              </div>
+              <iframe
+                title="CSS preview"
+                className="css-preview"
+                sandbox=""
+                srcDoc={cssPreviewDoc(code)}
+              />
+            </div>
+          )}
         </div>
 
         <footer className="modal-foot">
@@ -145,7 +210,27 @@ export function ForkEditor({ snippet, onClose }: Props) {
           <button className="ghost-btn" onClick={copy}>
             {copied ? '✓ Copied' : '⧉ Copy'}
           </button>
-          {snippet.runnable && (
+
+          <div className="save-group">
+            {saveError && <span className="save-error">{saveError}</span>}
+            <input
+              className="title-input"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              aria-label="Fork title"
+              placeholder="Fork title"
+            />
+            <button
+              className="ghost-btn save-btn"
+              onClick={() => void save()}
+              disabled={saving || !online}
+              title={online ? 'Save this fork to the feed' : 'Backend offline'}
+            >
+              {saving ? 'Saving…' : '⑂ Save fork'}
+            </button>
+          </div>
+
+          {showConsole && (
             <button className="run-btn" onClick={() => void run()} disabled={running}>
               {running ? 'Running…' : '▶ Run'}
             </button>
@@ -156,10 +241,32 @@ export function ForkEditor({ snippet, onClose }: Props) {
   )
 }
 
+function cssPreviewDoc(css: string): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0; min-height: 100vh; display: grid; place-items: center;
+      font-family: system-ui, sans-serif; color: #fff;
+      background:
+        radial-gradient(120% 120% at 0% 0%, #6d5cff55, transparent 60%),
+        radial-gradient(120% 120% at 100% 100%, #ff5c8a55, transparent 60%),
+        #14141f;
+      padding: 24px;
+    }
+    .demo, .glass, .card { max-width: 320px; }
+    ${css}
+  </style></head><body>
+    <div class="glass demo card">
+      <h3 style="margin:0 0 8px">Live preview</h3>
+      <p style="margin:0;opacity:.85">Your CSS is applied to <code>.glass</code>, <code>.card</code>, and <code>.demo</code>.</p>
+    </div>
+  </body></html>`
+}
+
 function extFor(language: Snippet['language']): string {
   switch (language) {
     case 'javascript':
-      return 'js'
+      return 'mjs'
     case 'typescript':
       return 'ts'
     case 'python':
